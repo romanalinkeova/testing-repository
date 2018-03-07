@@ -1,0 +1,241 @@
+\documentclass{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage{natbib}
+\usepackage{amsmath}
+\usepackage{amsfonts}       
+\usepackage{amssymb}
+\usepackage{listings}
+\usepackage{color}
+\usepackage{soul}
+
+\newtheorem{note}{Note}
+
+\title{Confidential Transactions on Ethereum - Draft}
+\date{}
+
+\begin{document}
+\maketitle
+
+
+\section{Introduction}
+In the world of cryptocurrencies it is sometimes desirable to keep transaction amounts secret. One way of doing this is by using the MimbleWimble protocol [citation], also known as Confidential Transactions [citation]. The MimbleWimble protocol enables the exchange of cryptocurrencies with the amounts being transferred known only to the participant parties, while still allowing the whole network to check the correctness of such transactions. This is achieved by combining cryptographic components such as hash functions, commitments and ring signatures.  This paper provides some background on mathematical and cryptographic concepts, followed by a description of how confidential token transfers can be implemented on Ethereum.
+
+
+\section{Background}
+This section introduces the reader to some of the concepts needed to better understand the outline of confidential transactions on Ethereum provided in Section~\ref{sec:outline}. After reading this, you should have a rough understanding of groups, elliptic curves, hash functions, commitments, and ring signatures.
+
+
+\subsection{Groups}
+One of the basic mathematical structures used in abstract algebra is called a group. A group is an algebraic structure that captures the concept of a set of elements equipped with a binary operator(i.e. operates on two operands) satisfying multiple conditions. Formally, a set G and a binary operation $\star$ form a \emph{group} $\mathbf{G} = (\text{G}, \star)$ if the following conditions are satisfied:
+\begin{itemize}
+    \item for all $a, b \in \text{G}$ : $a \star b \in \text{G}$; (\textit{closure})
+    \item for all $a, b, c \in \text{G}$ : $(a \star b) \star c = a \star (b \star c)$; (\textit{associativity})
+    \item there exists $e \in \text{G}$ such that for all $a \in \text{G}$ : $a \star e = e \star a = a$; (\textit{identity element})
+    \item for all $a\in \text{G}$ there exists $b \in \text{G}$ such that $a \star b = b \star a = e$. (\textit{inverse element})
+\end{itemize}
+Note that we distinguish between the carrier (or underlying) set of elements G and the pair $\mathbf{G} = (\text{G}, \star)$, which, together with the set G, contains information about the algebraic structure defined on G. An important property of a group is its \emph{order}: The \emph{order} of a group $\textbf{G} = (\text{G}, \star)$ is defined as the number of elements in set G. We also define two special types of groups: 
+\begin{itemize}
+    \item A group $\mathbf{G} = (\text{G}, \star)$ is called an \emph{abelian group} if for all $a, b \in \text{G}$ : $a \star b = b \star a$. This property is called commutativity.
+    \item A group $\mathbf{G} = (\text{G}, \star)$ is called a \emph{cyclic group} if there exists an element $g \in \mathbf{G}$ such that a sequence $g, g \star g, g \star g \star g, \ldots $ generates all elements from the set G.
+\end{itemize}
+
+\paragraph{A note on notation:} Let $n$ be a positive integer. The set $\{0, \ldots, n-1 \}$ equipped with the operation $+_{\text{ mod } n}$ forms a cyclic abelian group with order $n$. This group is denoted as 
+\begin{equation*}
+\mathbb{Z}_n = \big( \{0, \ldots, n-1 \}, +_{\text{ mod } n}\big),    
+\end{equation*} 
+where $+_{\text{ mod } n}$ is the symbol for modular addition. In order to achieve clarity in formulas, the operation $+_{\text{ mod } n}$ can be written only as $+$ with the information about the modulus omitted, since it is implied.
+
+
+\subsection{Elliptic Curve Cryptography}
+Algebraic structures that are suitable for cryptographic applications should be equipped with an operation that is feasible to determine for its elements and some problem associated with this operation that is infeasible to solve. Such an algebraic structure can be a set of points on an elliptic curve equipped with an addition operator and a point at infinity.  
+
+Since the formal definition of an elliptic curve is complicated and goes beyond the purpose of this {\color{red}paper} \st{document}, only an intuitive concept behind elliptic curves will be outlined. To grasp some notion of what an elliptic curve is, we can look at it as a set of points $\{[x, y] : x, y \in \mathbb{R}\}$ satisfying an equation of the form 
+\begin{equation*}
+    y^2 = x^3 + ax +b, 
+\end{equation*}
+where $a, b \in \mathbb{R}$, with
+\begin{equation*}
+    4a^3 + 27b^2 \neq 0,
+\end{equation*}
+including the point at infinity $\infty$. An elliptic curve can then be written as
+\begin{equation*}
+    \text{E} = \left\{ [x,y] \in \mathbb{R}^2 ~:~ y^2 = x^3 + ax + b,  4a^3 + 27b^2 \neq 0 \right\} \cup \{\infty\}.
+\end{equation*}
+The $+$ operation adds two points in E forming another point in E, and can be defined so that $\mathbf{E} = \left(\text{E}, +\right)$ forms a cyclic abelian group. Adding two points on an elliptic curve E in the group $\mathbf{E} = (\text{E}, +)$ is fast, which means that given a point P $\in \text{E}$, computing 
+\begin{equation*}
+    a\text{P} = \underbrace{\text{P} + \ldots  + \text{P}}_{a\text{-times}} 
+\end{equation*}
+for some positive integer $a$ can also be made fast. However, given two points $\text{G}, \text{H} \in \text{E}$, it is, under some conditions, infeasible to find a positive integer $a$ such that $\text{G} = a\text{H}$. This problem is referred to as the \emph{elliptic curve discrete logarithm problem}. We will assume that elliptic curves considered in this text satisfy conditions under which solving the elliptic curve discrete logarithm problem is difficult.  
+
+Based on the difficulty of the elliptic curve discrete logarithm problem a pair of cryptographic keys used in, for example, Public Key Infrastructure (PKI), can be created: For the group $\mathbf{E}$ of order $q$ defined on elliptic curve E, and generator G, a public key is a point P on the elliptic curve ($\text{P} \in \text{E}$) such that $\text{P} = x\text{G}$, where $x \in \mathbb{Z}_q$, and $x$ is the private key.
+
+
+\subsection{Cryptographic Hash Functions}
+A \emph{cryptographic hash function} is a function that takes an input of an arbitrary length and outputs data of a fixed size satisfying following conditions: 
+\begin{itemize}
+    \item the same input results in the same output; 
+    \item given an input, it is very feasible to calculate the output; 
+    \item given and output, it is unfeasible to calculate corresponding input; 
+    \item should the input change slightly, the output will change significantly;
+    \item it is unfeasible to find two different inputs resulting in the same output. 
+\end{itemize}
+
+
+\subsection{Pedersen Commitments}
+One of the cryptographic concepts used in confidential transactions are cryptographic commitments. A cryptographic commitment is a component that allows us to prove a knowledge of some value without revealing the value itself. The correctness of a commitment can always be checked later by revealing the initial value. The important property is that after a commitment is published the value cannot be changed since a slight change in the initial value would result in a significantly different commitment. 
+
+The basic idea is that a \emph{blinding factor} is randomly picked and combined with the initial value, forming a blinded value, in order to hide the initial value. The blinded value is then published as a commitment. To prove the commitment is correct, the blinding factor and the initial value can be revealed.     
+
+There are many types of commitment schemes one of which are Pedersen commitments. We will outline Pedersen commitment scheme in an abelian group $\mathbf{E}$ of a prime order $q$ in this section.
+
+Let $\mathbf{E}$ be an abelian group of a prime order $q$ and let G and H be two public unrelated generators of group $\mathbf{E}$. By unrelated we mean that it is unfeasible to find $a$ such that $\text{G} = a \text{H}$. Let $v \in \mathbb{Z}_q$ be the value to which we want to commit. The commitment scheme will work as follows:
+
+
+\begin{enumerate}
+    \item Pick a random $b \in \mathbb{Z}_q$. This $b$ is the \emph{blinding factor} for value $v$.
+    \item Calculate commitment $\mathcal{C}$
+    \begin{equation*}
+        \mathcal{C} = b\text{G} + v\text{H}.
+    \end{equation*}
+    \item Publish commitment $\mathcal{C}$.
+\end{enumerate}
+
+In order to verify the commitment $\mathcal{C}$ we publish the initial values $(v, b)$ and since generators G and H are public it can be easily verified that $\mathcal{C} = b\text{G} + v\text{H}$. 
+
+Note that the scheme is \emph{binding} which means that after a commitment $\mathcal{C}$ has been published it is unfeasible to change the values $(v,b)$. This property is based on the difficulty of the elliptic curve discrete logarithm problem. Also, the scheme is \emph{perfectly hiding}, meaning, when $b$ is truly random we cannot learn anything about value $v$ given $\mathcal{C}$. 
+
+Important property of this scheme is that it is \emph{additively homomorphic}, meaning that if we have a commitment $\mathcal{C}$ to $(v, b)$ and a commitment $\mathcal{C}^{\prime}$ to $(v^{\prime}, b^{\prime})$ then 
+\begin{equation*}
+    \mathcal{C} + \mathcal{C^{\prime}} = b\text{G} + v\text{H} + b^{\prime}\text{G} + v^{\prime}\text{H} = (b + b^{\prime})\text{G} + (v+v^{\prime})\text{H}
+\end{equation*}
+is the commitment to $(b + b^{\prime}, v+v^{\prime})$.
+
+
+\subsection{Ring Signatures}
+Second significant cryptographic component used in confidential transactions are digital signatures. The basic idea behind digital signatures is that a party owns two cryptographically linked keys, namely public key and private key and uses those keys in order to authenticate itself. The party keeps its private key secret and uses it to sign a message in order to prove the origin of that message (since the party is the only one who can access the private key it is also the only one who can sign the message). The signature can be verified using the public key which is publicly know. Digital signatures can be then used in order to prove that we know some value (our private key) without revealing that value. 
+
+On top of the basic digital signatures can be build ring signatures. Ring signature schemes capture the scenario when we have multiple pairs of public and private keys and we want to sign a message with only one private key from this set while keeping in secrecy which private key has been used. One of the ring signatures schemes is the AOS (Abe, Okhubo, Suzuki) ring signature scheme. 
+
+In this section we will outline the AOS ring signature scheme over an abelian group $\mathbf{G}$ of order $q$. Let G be a generator of the group $\mathbf{G}$, H be a cryptographic hash function and $m$ be the message to be signed. Assume we have a set of public keys $\{\text{P}_1, \ldots, \text{P}_n\}$ and a set corresponding private keys $\{\text{R}_1, \ldots, \text{R}_n\}$. Let assume we want to sign message $m$ with $j{\text{th}}$ private key $\text{R}_j$. The AOS ring signature will then work as follows: 
+
+\vspace{0.5cm}
+
+\emph{Note: all indices are carried modulo $n$.}
+
+\begin{enumerate}
+    \item Pick a random $k \in \mathbb{Z}_q$ and compute $e_{\text{j}} = \text{H} (m || k\text{G})$.
+    \item Starting at $i = (\text{j} + 1) \text{ mod } n $, for each $i \neq \text{j}$ calculate
+    \begin{align}
+        s_i &= \text{random number from } \mathbb{Z}_q; \nonumber \\ 
+        e_i &= \text{H}\left( m || s_i\text{G} - e_{i-1} \text{P}_i\right). \label{property}
+    \end{align}
+    \emph{Note: the property \eqref{property} must hold for all values $e$.}
+    \item The value $e_{\text{j}}$ has been determined in two different ways at this point: 
+    \begin{itemize}
+        \item from step 1:  $e_{\text{j}} = \text{H} (m || k\text{G})$;
+        \item from property \eqref{property}: $e_{j} = \text{H}\left( m || s_{\text{j}}\text{G} - e_{\text{j}-1} \text{P}_{\text{j}}\right)$;
+    \end{itemize}
+    hence in order to close the ring we have to calculate the remaining $s_{\text{j}}$ as
+    \begin{equation*}
+     s_{\text{j}} = k + \text{R}_j \cdot e_{\text{j}-1}.
+    \end{equation*}
+    After this step, the property \eqref{property} will hold for all $e_i, s_i, 0 \leq i < n$.
+    \item Publish the signature $(e_1, s_0, \ldots, s_{n-1})$. 
+    
+    \emph{Note: it does not matter which $e_i$ is published.}
+\end{enumerate}
+To verify the signature $(e_1, s_0, \ldots, s_{n-1})$ we start constructing the ring at $e_1$ and verify whether the ring closes correctly. This means that we will calculate 
+\begin{align*}
+    e_2 &= \text{H}(m || s_2\text{G} - e_1\text{P}_2) \\
+    e_3 &= \text{H}(m || s_3\text{G} - e_2\text{P}_3) \\
+    &\vdots \\
+    e_0 &= \text{H}(m || s_0\text{G} - e_{n-1}\text{P}_0) \\
+    e_1^{\prime} &= \text{H}(m || s_1\text{G} - e_0\text{P}_1)
+\end{align*}
+and verify whether $e_1 = e_1^{\prime}$.
+
+
+\section{Confidential transactions outline}\label{sec:outline}
+In this section we will combine above introduced Pedersen commitment scheme and AOS ring signature scheme to form an outline for confidential transactions. 
+
+A cryptocurrency transaction can be viewed as a triplet $input, output, fee$, where the equation
+\begin{equation} \label{transaction}
+    \text{input} = \text{output} + \text{fee}
+\end{equation}
+must hold in order to maintain consistency. For such a transaction we want to prove that \eqref{transaction} holds without revealing any of the values $input, output$ and $fee$. \\
+
+To do so we will:
+\begin{enumerate}
+    \item Hide all values $input, output$ and $fee$ using Pedersen commitment scheme. \\
+    \emph{Note: It is possible to verify whether congruence} 
+    \begin{equation*}
+        input \equiv output + fee \quad \text{ mod } q
+    \end{equation*}
+    \emph{holds after this step. This is done by utilising the additive homomorphic property of Pedersen commitment scheme.}
+    \item Prove that equivalence 
+    \begin{equation*}
+        input = output + fee
+    \end{equation*}
+    holds by proving that each value $input, output$ and $fee$ can be expressed in binary with at most $k$ bits where $2^{k+1} < q$. This can be done by publishing $k$ Pedersen commitment schemes for each value $input, output$ and $fee$. \\
+    \emph{Note: It is possible to verify that values $input, output$ and $fee$ can be expressed in $k$ constituents after this step. However, it is not yet proven that those constituents were created using bits and not some different values.} 
+    \item Prove with AOS ring signature scheme that only bits were used in the previous step.
+\end{enumerate}
+
+We will now elaborate each step in more details. 
+
+\paragraph{First step}
+To create a Pedersen commitment for each value $input, output$ and $fee$ we will randomly pick three blinding factor $b_{in} \in \mathbb{Z}_q, b_{out} \in \mathbb{Z}_q$ and $b_{fee} = b_{in} - b_{out}$ and calculate corresponding commitments:
+\begin{align*}
+    \mathcal{C}_{\text{in}} &= b_{\text{in}}\text{G} + \text{input} \cdot \text{H}, \\
+    \mathcal{C}_{\text{out}} &= b_{\text{out}}\text{G} + \text{output} \cdot \text{H}, \\
+    \mathcal{C}_{\text{fee}} &= b_{\text{fee}}\text{G} + \text{fee} \cdot \text{H}.
+\end{align*}
+After publishing $(\mathcal{C}_{\text{in}}, \mathcal{C}_{\text{out}}, \mathcal{C}_{\text{fee}})$ it can be verified using \eqref{transaction} that 
+\begin{align*}
+    \mathcal{C}_{\text{out}} + \mathcal{C}_{\text{fee}} = b_{\text{out}}\text{G} + \text{output} \cdot \text{H} + b_{\text{fee}}\text{G} + \text{fee} \cdot \text{H} = \\
+    = b_{\text{in}}\text{G} + \text{in} \cdot \text{H} = \mathcal{C}_{\text{in}}
+\end{align*}
+from which follows congruence
+\begin{equation*}
+    \text{input} \equiv \text{output} + \text{fee} \quad \text{ mod } q.
+\end{equation*}
+
+\paragraph{Second step} It has to be proven that each value $input, output$ and $fee$ can be expressed in binary with at most $k$ bits where $2^{k+1} <q$ in this step. This is done in the same manner for each of those values, hence to simplify, we will denote $v$ as the value for which we want to prove that it can be expressed in binary with at most $k$ bits. 
+
+Let $\mathcal{C}_v$ denotes the Pedersen commitment of value $v$ from the first step and let $b$ denotes the blinding factor used. To prove that value $v$ can be expressed with at most $k$ bits in binary we will create $k$ Pedersen commitments as follows:
+
+\begin{enumerate}
+    \item Express $v$ in binary as 
+    \begin{equation*}
+        v = \sum_{i=0}^{k-1} v_i2^i.
+    \end{equation*}
+    \item For all $0 \leq i \leq k-2$ randomly pick blinding factor $b_i \in \mathbb{Z}_q$.
+    \item Calculate $b_{k-1}$ such that
+    \begin{equation*}
+        b_{k-1} = b - \sum_{i=0}^{k-2} b_i.
+    \end{equation*}
+    \item For all $0 \leq i \leq k-1$ create commitments
+    \begin{equation} \label{binaryRep}
+        \mathcal{C}_i = b_i\text{G} + 2^i v_i \text{H}.
+    \end{equation}
+    \item Publish commitments $\mathcal{C}_v, \mathcal{C}_0, \ldots, \mathcal{C}_{k-1}$.
+\end{enumerate}
+To verify the commitments we have to check whether 
+\begin{equation*}
+    \mathcal{C}_v = \mathcal{C}_0 + \mathcal{C}_1 + \ldots + \mathcal{C}_{k-2} + \mathcal{C}_{k-1}.
+\end{equation*}
+
+\paragraph{Third step}
+To prove that all values $v_i$ in \eqref{binaryRep} are bits we will create a set of two public keys $\textbf{Cp}_i = \{\mathcal{C}_i, \mathcal{C}_i - 2^i \text{H}\}$ for each commitment $\mathcal{C}_i$, obtaining $k$ sets $\textbf{Cp}_0, \ldots, \textbf{Cp}_{k-1}$ each containing two public keys. 
+
+Taking any set $\mathbf{Cp}_i$ and considering the public key $\mathcal{C}_i$, the corresponding private key is some value $s \in \mathbb{Z}_q$ such that $\mathcal{C}_i = s \text{G}$. Analogically the private key for the public key $\mathcal{C}_i - 2^i\text{H}$ is some value $t \in \mathbb{Z}_q$ such that $\mathcal{C}_i - 2^i\text{H} = t \text{G}$. 
+
+Since we know the bits $v_i$, we know the private key for exactly one public key in each set $\textbf{Cp}_i$. This can be seen from 
+\begin{align*}
+    v_i &= 0 \implies \mathcal{C}_i = b_i\text{G} + 0\text{H} = b_i\text{G} \\
+    v_i &= 1 \implies \mathcal{C}_i - 2^i\text{H} = b_i\text{G} + 2^i\text{H} - 2^i\text{H} = b_i\text{G}.
+\end{align*}
+In order to prove that values $v_i$ are bits while hiding whether it is 0 or 1 we will construct $k$ AOS ring signatures, one for each set $\mathbf{Cp}_i$, signing with the private key that is known to us.
+
+\end{document}
